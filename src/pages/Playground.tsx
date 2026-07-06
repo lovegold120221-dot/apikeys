@@ -47,6 +47,7 @@ export function Playground() {
   const [copied, setCopied] = useState(false);
   
   const [loading, setLoading] = useState(false);
+  const [waitingFirstToken, setWaitingFirstToken] = useState(false);
   const [response, setResponse] = useState("");
   const [rawRequest, setRawRequest] = useState("");
   const [rawResponse, setRawResponse] = useState("");
@@ -88,8 +89,69 @@ export function Playground() {
     fetchModels();
   }, [apiKey]);
 
-  // --- Core API call helper (non-streaming) ---
-  const callModel = async (targetModel: string, messages: any[], temp: number): Promise<string> => {
+  // --- Core API call helper (streaming by default) ---
+  const callModel = async (
+    targetModel: string,
+    messages: any[],
+    temp: number,
+    onChunk?: (full: string) => void,
+    onFirstToken?: () => void
+  ): Promise<string> => {
+    const res = await fetch("/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({ model: targetModel, messages, temperature: temp, stream: true })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `HTTP ${res.status}`);
+    }
+
+    const reader = res.body?.getReader();
+    const decoder = new TextDecoder();
+    let full = "";
+    let firstSeen = false;
+
+    if (!reader) return full;
+
+    let buffer = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const payload = line.slice(6);
+        if (payload === "[DONE]") continue;
+        try {
+          const data = JSON.parse(payload);
+          const delta = data.choices?.[0]?.delta?.content || "";
+          if (delta) {
+            if (!firstSeen) {
+              firstSeen = true;
+              onFirstToken?.();
+            }
+            full += delta;
+            onChunk?.(full);
+          }
+        } catch {
+          // partial JSON — ignore, will be completed in a later chunk
+        }
+      }
+    }
+    return full;
+  };
+
+  // --- Validator: asks eburon-build-validator to grade the generated output ---
+  // Uses a non-streaming internal call (validator output is short).
+  const callModelSync = async (targetModel: string, messages: any[], temp: number): Promise<string> => {
     const res = await fetch("/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -106,7 +168,6 @@ export function Playground() {
     return data.choices?.[0]?.message?.content || "";
   };
 
-  // --- Validator: asks eburon-build-validator to grade the generated output ---
   const runValidator = async (userQuery: string, generatedOutput: string): Promise<{ passed: boolean; feedback: string }> => {
     const validatorPrompt = `You are the Eburon Build Validator. You review an AI-generated HTML component that will be rendered in a live preview iframe.
 
@@ -127,7 +188,7 @@ Respond in EXACTLY this format on two lines:
 PASS or FAIL
 <one short sentence describing the verdict; if FAIL, name the specific defect to fix>`;
 
-    const verdict = await callModel(VALIDATOR_MODEL, [
+    const verdict = await callModelSync(VALIDATOR_MODEL, [
       { role: "system", content: "You are a strict, meticulous build validator. Be concise and precise." },
       { role: "user", content: validatorPrompt }
     ], 0.2);
@@ -158,6 +219,7 @@ PASS or FAIL
     }
 
     setLoading(true);
+    setWaitingFirstToken(false);
     setResponse("");
     setRawResponse("");
     setValidationStatus('idle');
@@ -200,9 +262,18 @@ Redo the component. Fix the specific defects above. Keep what worked. Output a c
           setValidationStatus('reprompting');
         }
 
-        // Generate
+        // Generate (streaming)
         setValidationStatus(attemptNum === 0 ? 'idle' : 'reprompting');
-        currentOutput = await callModel(model, messages, temperature);
+        setWaitingFirstToken(true);
+        setResponse("");
+        currentOutput = await callModel(
+          model,
+          messages,
+          temperature,
+          (full) => setResponse(full),
+          () => setWaitingFirstToken(false)
+        );
+        setWaitingFirstToken(false);
         setResponse(currentOutput);
         setRawResponse(JSON.stringify({
           model,
@@ -233,8 +304,10 @@ Redo the component. Fix the specific defects above. Keep what worked. Output a c
     } catch (e: any) {
       setResponse(`Error: ${e.message}`);
       setValidationStatus('idle');
+      setWaitingFirstToken(false);
     } finally {
       setLoading(false);
+      setWaitingFirstToken(false);
     }
   };
 
@@ -380,6 +453,11 @@ Redo the component. Fix the specific defects above. Keep what worked. Output a c
             </div>
           </div>
           
+          {/* Laser loading bar — sweeps left→right while waiting for first stream token */}
+          {waitingFirstToken && (
+            <div className="h-0.5 w-full bg-[var(--bg-tertiary)] eburon-laser-loader shrink-0" />
+          )}
+          
           <div className="flex-1 p-6 overflow-y-auto space-y-8 font-mono text-sm custom-scrollbar">
             {!response && !loading && !rawRequest && (
               <div className="h-full flex flex-col items-center justify-center text-[var(--text-secondary)] text-sm space-y-4 opacity-50">
@@ -406,7 +484,10 @@ Redo the component. Fix the specific defects above. Keep what worked. Output a c
                 <div className="space-y-4 w-full max-w-[85%]">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-[10px] text-[var(--text-tertiary)] uppercase font-bold">{model}</span>
-                    {loading && <span className="text-[9px] text-[var(--accent)] font-mono bg-[var(--accent)]/10 px-1.5 py-0.2 rounded border border-[var(--accent)]/20 animate-pulse">Running inference...</span>}
+                    {loading && (waitingFirstToken
+                      ? <span className="text-[9px] text-blue-400 font-mono bg-blue-400/10 px-1.5 py-0.2 rounded border border-blue-400/20 animate-pulse">Awaiting first token…</span>
+                      : <span className="text-[9px] text-[var(--accent)] font-mono bg-[var(--accent)]/10 px-1.5 py-0.2 rounded border border-[var(--accent)]/20 animate-pulse">Streaming…</span>
+                    )}
                     {attempt > 0 && (validationStatus === 'reprompting' || validationStatus === 'validating') && (
                       <span className="text-[9px] text-amber-500 font-mono bg-amber-500/10 px-1.5 py-0.2 rounded border border-amber-500/20 animate-pulse">
                         <RefreshCw size={9} className="inline mr-1" />Reprompt #{attempt}
@@ -429,10 +510,10 @@ Redo the component. Fix the specific defects above. Keep what worked. Output a c
                     )}
                   </div>
                   <div className="p-3.5 rounded-xl bg-[var(--bg-secondary)]/60 border border-[var(--border-color)] text-[var(--text-secondary)] leading-relaxed text-xs shadow-sm backdrop-blur-sm">
-                    {loading && !response ? (
+                    {loading && (waitingFirstToken || !response) ? (
                       <span className="inline-block w-2 h-4 bg-[var(--accent)] animate-pulse"></span>
                     ) : (
-                      <div className="whitespace-pre-wrap">{response}</div>
+                      <div className="whitespace-pre-wrap">{response}<span className="inline-block w-1.5 h-3.5 bg-[var(--accent)] animate-pulse align-middle ml-0.5" /></div>
                     )}
                   </div>
                   

@@ -65,3 +65,24 @@ body {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
+
+@keyframes eburon-laser-sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.eburon-laser-loader {
+  position: relative;
+  overflow: hidden;
+}
+.eburon-laser-loader::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 40%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, var(--color-lime, #a3e635), transparent);
+  filter: blur(2px);
+  animation: eburon-laser-sweep 1s linear infinite;
+}
