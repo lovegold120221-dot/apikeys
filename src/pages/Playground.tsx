@@ -115,6 +115,7 @@ export function Playground() {
       const reader = res.body?.getReader();
       const decoder = new TextDecoder();
       let full = "";
+      let reasoning = "";
       let firstSeen = false;
 
       if (!reader) return full;
@@ -134,11 +135,29 @@ export function Playground() {
           if (payload === "[DONE]") continue;
           try {
             const data = JSON.parse(payload);
-            const delta = data.choices?.[0]?.delta?.content || "";
+            const choice = data.choices?.[0];
+            if (!choice) continue;
+            const delta = choice.delta?.content || "";
+            const reasoningDelta = choice.delta?.reasoning || "";
+            // Some models emit reasoning/thinking tokens before content.
+            // Capture them so the laser stops and the UI shows progress.
+            if (reasoningDelta) {
+              if (!firstSeen) {
+                firstSeen = true;
+                onFirstToken?.();
+              }
+              reasoning += reasoningDelta;
+              // Surface reasoning live as "thinking" prefix so the user sees activity
+              onChunk?.(`\n> ${reasoning.split("\n").join("\n> ")}\n\n*(generating…)*\n`);
+            }
             if (delta) {
               if (!firstSeen) {
                 firstSeen = true;
                 onFirstToken?.();
+              }
+              // First real content — reset the reasoning display, start the real output
+              if (!full) {
+                full = reasoning ? `\n<details>\n<summary>💭 Reasoning</summary>\n\n${reasoning}\n\n</details>\n\n` : "";
               }
               full += delta;
               onChunk?.(full);
