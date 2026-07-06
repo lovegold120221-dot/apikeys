@@ -1,7 +1,7 @@
 import React from 'react';
 import { CodeBlock } from '../../components/CodeBlock';
 import { NavLink } from 'react-router-dom';
-import { Languages, FileText, ImageIcon, Globe, Search, ArrowRight } from 'lucide-react';
+import { Languages, FileText, ImageIcon, Search, ArrowRight } from 'lucide-react';
 
 const capabilities = [
   { 
@@ -15,18 +15,6 @@ const capabilities = [
     desc: 'Extract and translate text directly from images and screenshots.', 
     icon: ImageIcon, 
     path: '/docs/translation/images' 
-  },
-  { 
-    title: 'Document Translation', 
-    desc: 'Professional translation for PDF, DOCX, and other file formats.', 
-    icon: FileText, 
-    path: '/docs/translation/documents' 
-  },
-  { 
-    title: 'Website Translation', 
-    desc: 'Translate entire web pages while preserving layout and interactive elements.', 
-    icon: Globe, 
-    path: '/docs/translation/websites' 
   },
 ];
 

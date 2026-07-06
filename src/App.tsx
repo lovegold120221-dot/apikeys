@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, NavLink, useLocation, Navigate } from 'react-router-dom';
-import { Moon, Sun, Menu, X, Terminal, Book, Box, Code2, Zap, Server, Languages, Search, FileText, Globe, Image as ImageIcon, User } from 'lucide-react';
+import { Moon, Sun, Menu, X, Terminal, Book, Box, Code2, Zap, Server, Languages, Search, FileText, Image as ImageIcon, User } from 'lucide-react';
 import { cn } from './components/CodeBlock';
 import { useAuth } from './context/AuthContext';
 import { Overview } from './pages/Overview';
@@ -25,8 +25,6 @@ import { WebSearch } from './pages/capabilities/WebSearch';
 import { TranslationOverview } from './pages/translation/TranslationOverview';
 import { TranslationText } from './pages/translation/TranslationText';
 import { TranslationImages } from './pages/translation/TranslationImages';
-import { TranslationDocuments } from './pages/translation/TranslationDocuments';
-import { TranslationWebsites } from './pages/translation/TranslationWebsites';
 import { TranslationDetection } from './pages/translation/TranslationDetection';
 import { SupportedLanguages } from './pages/translation/SupportedLanguages';
 import { TranslationPlayground } from './pages/translation/TranslationPlayground';
@@ -49,8 +47,6 @@ const translationItems = [
   { path: '/docs/translation/overview', label: 'Overview', icon: Languages },
   { path: '/docs/translation/text', label: 'Text Translation', icon: FileText },
   { path: '/docs/translation/images', label: 'Image Translation', icon: ImageIcon },
-  { path: '/docs/translation/documents', label: 'Document Translation', icon: FileText },
-  { path: '/docs/translation/websites', label: 'Website Translation', icon: Globe },
   { path: '/docs/translation/language-detection', label: 'Language Detection', icon: Search },
   { path: '/docs/translation/supported-languages', label: 'Supported Languages', icon: Languages },
 ];
@@ -327,8 +323,6 @@ export default function App() {
               <Route path="/docs/translation/overview" element={<TranslationOverview />} />
               <Route path="/docs/translation/text" element={<TranslationText />} />
               <Route path="/docs/translation/images" element={<TranslationImages />} />
-              <Route path="/docs/translation/documents" element={<TranslationDocuments />} />
-              <Route path="/docs/translation/websites" element={<TranslationWebsites />} />
               <Route path="/docs/translation/language-detection" element={<TranslationDetection />} />
               <Route path="/docs/translation/supported-languages" element={<SupportedLanguages />} />
               <Route path="/playground/translation" element={<TranslationPlayground />} />

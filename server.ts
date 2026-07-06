@@ -557,55 +557,6 @@ async function startServer() {
     }
   });
 
-  app.post("/v1/translation/documents", authMiddleware, async (req, res) => {
-    try {
-      const { file_data, target_language } = req.body;
-      if (!file_data || !target_language) {
-        return res.status(400).json({ error: "Missing required fields" });
-      }
-
-      consumeTokens(req.uid!, 1000);
-
-      res.json({
-        object: "document_translation", status: "completed",
-        id: "doc_" + Math.random().toString(36).substring(7), target_language,
-        extracted_text: "", translated_text: "",
-        note: "Text extraction from documents is not available via the free tier.",
-        usage: { total_tokens: 1000 },
-        provider: "eburon-document-nmt"
-      });
-    } catch (error: any) {
-      res.status(500).json({ error: "Document translation failed", details: error.message });
-    }
-  });
-
-  app.post("/v1/translation/websites", authMiddleware, async (req, res) => {
-    try {
-      const { url, target_language } = req.body;
-      if (!url || !target_language) {
-        return res.status(400).json({ error: "Missing required fields: url, target_language" });
-      }
-
-      const siteResponse = await fetch(url);
-      const html = await siteResponse.text();
-      const plainText = html.replace(/<[^>]*>?/gm, ' ').substring(0, 5000);
-      const { translated } = await gt(plainText, target_language);
-
-      const tokens = Math.ceil(plainText.length / 4);
-      consumeTokens(req.uid!, tokens);
-
-      res.json({
-        object: "website_translation", url, target_language,
-        translated_url: `https://eburon.ai/proxy?url=${encodeURIComponent(url)}&tl=${target_language}`,
-        translation_preview: translated,
-        usage: { input_tokens: tokens, total_tokens: tokens },
-        provider: "eburon-edge-nmt"
-      });
-    } catch (error: any) {
-      res.status(500).json({ error: "Website translation failed", details: error.message });
-    }
-  });
-
   app.get("/v1/translation/languages", authMiddleware, async (req, res) => {
     res.json({
       object: "list",

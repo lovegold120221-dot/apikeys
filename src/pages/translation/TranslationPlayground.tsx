@@ -2,16 +2,16 @@ import React, { useState, useEffect } from 'react';
 import { SUPPORTED_LANGUAGES } from '../../data/languages';
 import { CodeBlock, cn } from '../../components/CodeBlock';
 import { useAuth } from '@/src/context/AuthContext';
-import { translateVisualImage, extractDocumentText } from '@/src/lib/translateFile';
+import { translateVisualImage } from '@/src/lib/translateFile';
 import { 
-  Languages, FileText, ImageIcon, Globe, Search, 
+  Languages, FileText, ImageIcon, Search, 
   Send, Loader2, Copy, Check, Eye, EyeOff, 
-  Upload, Link as LinkIcon, RefreshCw, X, ArrowRight,
+  Upload, RefreshCw, X, ArrowRight,
   AlertTriangle,
   Download
 } from 'lucide-react';
 
-type Tab = 'text' | 'image' | 'document' | 'website' | 'detect';
+type Tab = 'text' | 'image' | 'detect';
 
 export function TranslationPlayground() {
   const { user, getIdToken } = useAuth();
@@ -19,7 +19,6 @@ export function TranslationPlayground() {
   const [sourceLang, setSourceLang] = useState('auto');
   const [targetLang, setTargetLang] = useState('en');
   const [inputText, setInputText] = useState("");
-  const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<any>(null);
   const [showCode, setShowCode] = useState(false);
@@ -44,25 +43,12 @@ export function TranslationPlayground() {
     fileInputRef.current?.click();
   };
 
-  const fileToBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => {
-        const base64String = (reader.result as string).split(',')[1];
-        resolve(base64String);
-      };
-      reader.onerror = error => reject(error);
-    });
-  };
-
   // For the generated request display
   const [rawRequest, setRawRequest] = useState("");
 
   const handleTranslate = async () => {
     if ((activeTab === 'text' || activeTab === 'detect') && !inputText) return;
-    if (activeTab === 'website' && !url) return;
-    if ((activeTab === 'image' || activeTab === 'document') && !selectedFile) return;
+    if (activeTab === 'image' && !selectedFile) return;
 
     setLoading(true);
     setResponse(null);
@@ -81,10 +67,6 @@ export function TranslationPlayground() {
           endpoint = "/v1/translation/detect-language";
           body = { text: inputText };
           break;
-        case 'website':
-          endpoint = "/v1/translation/websites";
-          body = { url, target_language: targetLang };
-          break;
         case 'image': {
           const result = await translateVisualImage(selectedFile!, targetLang, (stage) => setProgressText(stage));
           body = { file: selectedFile!.name, target_language: targetLang };
@@ -98,40 +80,9 @@ export function TranslationPlayground() {
           });
           break;
         }
-        case 'document': {
-          setProgressText("Extracting text…");
-          const extracted = await extractDocumentText(selectedFile!);
-          setProgressText("Translating document…");
-          const token = await getIdToken();
-          const docRes = await fetch("/v1/translation/text", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            },
-            body: JSON.stringify({ text: extracted, target_language: targetLang }),
-          });
-          const contentType = docRes.headers.get("content-type");
-          if (!contentType || !contentType.includes("application/json")) {
-            throw new Error(`Server returned non-JSON response (${docRes.status}). Is the API server running on port 3000?`);
-          }
-          const docData = await docRes.json();
-          if (!docRes.ok) {
-            throw new Error(docData.error?.message || `Translation failed (${docRes.status})`);
-          }
-          body = { file: selectedFile!.name, target_language: targetLang };
-          setResponse({
-            object: "document_translation",
-            target_language: targetLang,
-            detected_language: docData.detected_language,
-            extracted_text: extracted,
-            translated_text: docData.translation,
-          });
-          break;
-        }
       }
 
-      setRawRequest(JSON.stringify({ ...body, image_data: body.image_data ? "[BASE64_DATA]" : body.file_data ? "[BASE64_DATA]" : undefined }, null, 2));
+      setRawRequest(JSON.stringify({ ...body, image_data: body.image_data ? "[BASE64_DATA]" : undefined }, null, 2));
 
       if (endpoint) {
         const token = await getIdToken();
@@ -159,7 +110,7 @@ export function TranslationPlayground() {
       setResponse({
         error: isNetwork ? "Network request failed" : "Translation failed",
         details: isNetwork
-          ? (activeTab === 'image' || activeTab === 'document')
+          ? activeTab === 'image'
             ? "The request to the translation endpoint was blocked or dropped. This is usually an ad-blocker or network policy blocking translate.googleapis.com, or the API server is unreachable. Ensure the server is running (npm run dev) and that browser extensions aren't blocking the request."
             : "The API server is not running or a browser extension blocked the request. Start it with: npm run dev"
           : msg,
@@ -184,8 +135,6 @@ export function TranslationPlayground() {
         {[
           { id: 'text', label: 'Text', icon: FileText },
           { id: 'image', label: 'Image', icon: ImageIcon },
-          { id: 'document', label: 'Document', icon: FileText },
-          { id: 'website', label: 'Website', icon: Globe },
           { id: 'detect', label: 'Detect', icon: Search },
         ].map((tab) => (
           <button
@@ -242,7 +191,7 @@ export function TranslationPlayground() {
           {/* Dynamic Input based on Tab */}
           <div className="flex-1 flex flex-col gap-4">
             <label className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-tertiary)]">
-              {activeTab === 'website' ? 'Website URL' : activeTab === 'image' || activeTab === 'document' ? 'Upload Content' : 'Input Text'}
+              {activeTab === 'image' ? 'Upload Image' : 'Input Text'}
             </label>
             
             {activeTab === 'text' || activeTab === 'detect' ? (
@@ -252,19 +201,6 @@ export function TranslationPlayground() {
                 placeholder={activeTab === 'text' ? "Enter text to translate..." : "Enter text to detect language..."}
                 className="w-full flex-1 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] p-4 text-sm text-[var(--text-primary)] placeholder-[var(--text-tertiary)] focus:outline-none focus:border-[var(--accent)] leading-relaxed transition-all resize-none shadow-inner"
               />
-            ) : activeTab === 'website' ? (
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                  <LinkIcon size={16} className="text-[var(--text-tertiary)]" />
-                </div>
-                <input
-                  type="url"
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  placeholder="https://example.com"
-                  className="w-full pl-12 pr-4 py-3 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)] transition-all shadow-inner"
-                />
-              </div>
             ) : (
               <div 
                 onClick={handleUploadClick}
@@ -277,7 +213,7 @@ export function TranslationPlayground() {
                   type="file" 
                   ref={fileInputRef}
                   onChange={handleFileSelect}
-                  accept={activeTab === 'image' ? "image/*" : ".pdf,.docx,.txt"}
+                  accept="image/*"
                   className="hidden"
                 />
                 
@@ -452,21 +388,7 @@ export function TranslationPlayground() {
                           </div>
                         ) : (
                           <div className="text-xl font-medium text-[var(--text-primary)] leading-relaxed max-h-96 overflow-y-auto custom-scrollbar">
-                            {response.translation || response.detected_language || response.translated_text || response.translated_url || ""}
-                            {activeTab === 'website' && response.translation_preview && (
-                              <div className="mt-4 p-4 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)]">
-                                 <p className="text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-widest mb-2">Content Preview</p>
-                                 <p className="text-sm text-[var(--text-secondary)] italic leading-relaxed">{response.translation_preview}</p>
-                              </div>
-                            )}
-                            {activeTab === 'website' && (
-                              <div className="mt-4 p-4 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] flex items-center justify-between group/link">
-                                 <span className="text-sm text-[var(--text-secondary)] truncate mr-4">{response.translated_url}</span>
-                                 <a href={response.translated_url} target="_blank" rel="noreferrer" className="p-2 rounded-lg bg-[var(--accent)] text-[var(--accent-fg)] hover:scale-110 transition-all">
-                                   <Globe size={16} />
-                                 </a>
-                              </div>
-                            )}
+                            {response.translation || response.detected_language || response.translated_text || ""}
                           </div>
                         )}
                       </div>
