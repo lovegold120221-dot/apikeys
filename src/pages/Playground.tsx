@@ -3,24 +3,13 @@ import { CodeBlock, cn } from '../components/CodeBlock';
 import { useAuth } from '@/src/context/AuthContext';
 import { Send, Loader2, Copy, Check, Eye, EyeOff, Layout, Maximize2, X as CloseIcon, ShieldCheck, AlertCircle, RefreshCw } from 'lucide-react';
 
-// Hidden universal directive — always prepended to every request, invisible to the user.
-// Forces the model to emit a self-contained, preview-ready HTML/CSS/JS component
-// regardless of the user's query, so the Live Preview iframe always has something to render.
-const PREVIEW_DIRECTIVE = `You are Eburon AI, an elite full-stack engineer and UI architect.
-
-OUTPUT CONTRACT (non-negotiable, applies to EVERY response):
-1. Always end your response with a single self-contained, runnable HTML component inside one fenced \`\`\`html block.
-2. That block MUST include <!DOCTYPE html>, <html>, <head>, <style>, and <body> — fully inlined CSS and JS, no external imports, no external scripts, no CDN fetches that can fail offline.
-3. The component must visually and functionally answer the user's request (dashboard, chart, form, animation, landing page, calculator, game, widget, etc.). If the request is informational, render the information as a beautifully styled standalone page.
-4. Use modern, accessible, responsive design. Vanilla HTML/CSS/JS only inside the block.
-5. Keep JS framework-free. Use inline <script>. No React, no Vue, no Tailwind CDN.
-6. The \`\`\`html block is what gets rendered in the Live Preview iframe, so it MUST be valid and runnable on its own.
-7. You may explain your reasoning BEFORE the html block, but the html block is mandatory and must come last.
-
-Begin every response with a 1-2 line summary of what you built, then the \`\`\`html block.`;
+// Hidden universal directive — short and simple so small local models can follow it.
+// Forces the model to end its response with a self-contained HTML block for the preview iframe.
+const PREVIEW_DIRECTIVE = `You are Eburon AI. Answer the user's request, then ALWAYS end your reply with a single self-contained \`\`\`html block (with <!DOCTYPE html>, inlined CSS/JS, no external CDN). That block renders in a live preview iframe.`;
 
 const VALIDATOR_MODEL = 'eburon-build-validator';
-const MAX_REPROMPT_ATTEMPTS = 2;
+const MAX_REPROMPT_ATTEMPTS = 1;
+const GENERATION_TIMEOUT_MS = 60_000;
 
 const DEFAULT_MODELS = [
   'eburon-core',
@@ -95,108 +84,123 @@ export function Playground() {
     messages: any[],
     temp: number,
     onChunk?: (full: string) => void,
-    onFirstToken?: () => void
+    onFirstToken?: () => void,
+    timeoutMs: number = GENERATION_TIMEOUT_MS
   ): Promise<string> => {
-    const res = await fetch("/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({ model: targetModel, messages, temperature: temp, stream: true })
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error?.message || `HTTP ${res.status}`);
-    }
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch("/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({ model: targetModel, messages, temperature: temp, stream: true }),
+        signal: ctrl.signal,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error?.message || `HTTP ${res.status}`);
+      }
 
-    const reader = res.body?.getReader();
-    const decoder = new TextDecoder();
-    let full = "";
-    let firstSeen = false;
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      let full = "";
+      let firstSeen = false;
 
-    if (!reader) return full;
+      if (!reader) return full;
 
-    let buffer = "";
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+      let buffer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
 
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
 
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        const payload = line.slice(6);
-        if (payload === "[DONE]") continue;
-        try {
-          const data = JSON.parse(payload);
-          const delta = data.choices?.[0]?.delta?.content || "";
-          if (delta) {
-            if (!firstSeen) {
-              firstSeen = true;
-              onFirstToken?.();
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const payload = line.slice(6);
+          if (payload === "[DONE]") continue;
+          try {
+            const data = JSON.parse(payload);
+            const delta = data.choices?.[0]?.delta?.content || "";
+            if (delta) {
+              if (!firstSeen) {
+                firstSeen = true;
+                onFirstToken?.();
+              }
+              full += delta;
+              onChunk?.(full);
             }
-            full += delta;
-            onChunk?.(full);
+          } catch {
+            // partial JSON — ignore, will be completed in a later chunk
           }
-        } catch {
-          // partial JSON — ignore, will be completed in a later chunk
         }
       }
+      return full;
+    } finally {
+      clearTimeout(timer);
     }
-    return full;
   };
 
   // --- Validator: asks eburon-build-validator to grade the generated output ---
   // Uses a non-streaming internal call (validator output is short).
-  const callModelSync = async (targetModel: string, messages: any[], temp: number): Promise<string> => {
-    const res = await fetch("/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({ model: targetModel, messages, temperature: temp, stream: false })
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error?.message || `HTTP ${res.status}`);
+  const callModelSync = async (targetModel: string, messages: any[], temp: number, timeoutMs: number = 60_000): Promise<string> => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch("/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({ model: targetModel, messages, temperature: temp, stream: false }),
+        signal: ctrl.signal,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error?.message || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      return data.choices?.[0]?.message?.content || "";
+    } finally {
+      clearTimeout(timer);
     }
-    const data = await res.json();
-    return data.choices?.[0]?.message?.content || "";
   };
 
+  // --- Validator: deterministic local check first, LLM only for a short note ---
   const runValidator = async (userQuery: string, generatedOutput: string): Promise<{ passed: boolean; feedback: string }> => {
-    const validatorPrompt = `You are the Eburon Build Validator. You review an AI-generated HTML component that will be rendered in a live preview iframe.
+    // 1) Deterministic check: does a ```html block exist and contain a DOCTYPE?
+    const hasHtmlBlock = /```html\s*([\s\S]*?)```/i.test(generatedOutput);
+    const hasDoctype = /<!doctype\s+html>/i.test(generatedOutput);
 
-USER REQUEST:
-${userQuery}
+    if (hasHtmlBlock && hasDoctype) {
+      // Passed locally — ask the LLM validator for a short, optional note (non-blocking)
+      let note = "Output validated.";
+      try {
+        const verdict = await callModelSync(VALIDATOR_MODEL, [
+          { role: "system", content: "You are a build validator. Reply in one short sentence." },
+          { role: "user", content: `Briefly grade this HTML preview in one sentence. Say PASS or FAIL first.\n\n${generatedOutput.slice(-1500)}` }
+        ], 0.2, 15_000);
+        const t = verdict.trim();
+        if (t) note = t;
+      } catch { /* ignore — local check already passed */ }
+      return { passed: true, feedback: note };
+    }
 
-GENERATED OUTPUT (the assistant's full response, ending in an \`\`\`html block):
-${generatedOutput}
-
-GRADE STRICTLY on:
-1. Does the output contain a single self-contained \`\`\`html block with <!DOCTYPE html>?
-2. Is it fully inlined (no external CDN/script imports that can fail)?
-3. Does it visually/functionally answer the user's request?
-4. Is it valid, runnable HTML/CSS/JS with no obvious syntax errors?
-5. Is it responsive and accessible?
-
-Respond in EXACTLY this format on two lines:
-PASS or FAIL
-<one short sentence describing the verdict; if FAIL, name the specific defect to fix>`;
-
-    const verdict = await callModelSync(VALIDATOR_MODEL, [
-      { role: "system", content: "You are a strict, meticulous build validator. Be concise and precise." },
-      { role: "user", content: validatorPrompt }
-    ], 0.2);
-
-    const trimmed = verdict.trim();
-    const passed = /^PASS\b/i.test(trimmed);
-    const feedback = trimmed.split("\n").slice(1).join(" ").trim() || (passed ? "Output validated." : "Output failed validation.");
-    return { passed, feedback };
+    // 2) Failed locally — build a precise fix instruction (no LLM round-trip needed)
+    const missing = [
+      !hasHtmlBlock && "no \`\`\`html block found",
+      !hasDoctype && "missing <!DOCTYPE html>",
+    ].filter(Boolean).join("; ");
+    return {
+      passed: false,
+      feedback: `Output is missing required elements: ${missing}. Re-do and end with a complete \`\`\`html block including <!DOCTYPE html>.`,
+    };
   };
 
   // Extract the last ```html block from a response for preview rendering
@@ -248,16 +252,8 @@ PASS or FAIL
         if (attemptNum > 0 && validationFeedback) {
           // Reprompt with validator feedback attached
           messages.push({
-            role: "assistant",
-            content: currentOutput
-          });
-          messages.push({
             role: "user",
-            content: `The Eburon Build Validator reviewed your previous output and gave this feedback:
-
-${validationFeedback}
-
-Redo the component. Fix the specific defects above. Keep what worked. Output a corrected, complete, self-contained \`\`\`html block. Do not explain at length — focus on the fix.`
+            content: `Your previous reply was missing: ${validationFeedback}. Re-do your answer and end with a complete \`\`\`html block.`
           });
           setValidationStatus('reprompting');
         }
