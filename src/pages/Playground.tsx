@@ -1,7 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { CodeBlock, cn } from '../components/CodeBlock';
+import { CodeArtifact } from '../components/CodeArtifact';
 import { useAuth } from '@/src/context/AuthContext';
-import { Send, Loader2, Copy, Check, Eye, EyeOff, Layout, Maximize2, X as CloseIcon, ShieldCheck, AlertCircle, RefreshCw } from 'lucide-react';
+import { Send, Loader2, Copy, Check, Eye, EyeOff, ShieldCheck, AlertCircle, RefreshCw, Brain, ChevronDown, ChevronUp } from 'lucide-react';
 
 // Hidden universal directive — short and simple so small local models can follow it.
 // Forces the model to end its response with a self-contained HTML block for the preview iframe.
@@ -32,7 +37,6 @@ export function Playground() {
   const [userPrompt, setUserPrompt] = useState("");
   const [temperature, setTemperature] = useState(0.7);
   const [showCode, setShowCode] = useState(false);
-  const [showPreview, setShowPreview] = useState(false);
   const [copied, setCopied] = useState(false);
   
   const [loading, setLoading] = useState(false);
@@ -221,18 +225,6 @@ export function Playground() {
     };
   };
 
-  // Extract the last ```html block from a response for preview rendering
-  const extractHtml = (text: string): string => {
-    const blocks = text.match(/```html\s*([\s\S]*?)```/gi);
-    if (!blocks || blocks.length === 0) {
-      // fall back: maybe it's just raw HTML
-      if (/<!doctype html>/i.test(text) || /<html[\s>]/i.test(text)) return text;
-      return "";
-    }
-    const last = blocks[blocks.length - 1];
-    return last.replace(/^```html\s*/i, "").replace(/```$/i, "").trim();
-  };
-
   const handleSend = async () => {
     if (!userPrompt.trim()) return;
     if (!apiKey) {
@@ -247,7 +239,6 @@ export function Playground() {
     setValidationStatus('idle');
     setValidationFeedback("");
     setAttempt(0);
-    setShowPreview(true);
 
     // Hidden directive always prepended — invisible to the user.
     const systemContent = PREVIEW_DIRECTIVE + (systemPrompt ? "\n\nADDITIONAL CONTEXT FROM USER:\n" + systemPrompt : "");
@@ -428,19 +419,6 @@ export function Playground() {
             <div className="flex items-center gap-2">
               {response && (
                 <button 
-                  onClick={() => setShowPreview(!showPreview)}
-                  className={cn(
-                    "p-1.5 rounded-lg border border-[var(--border-color)] transition-all flex items-center gap-1.5",
-                    showPreview ? "bg-[var(--accent)]/10 text-[var(--accent)]" : "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-                  )}
-                  title={showPreview ? "Hide Preview" : "Live Preview"}
-                >
-                  <Layout size={14} />
-                  <span className="text-[10px] font-bold uppercase hidden sm:inline">Preview</span>
-                </button>
-              )}
-              {response && (
-                <button 
                   onClick={handleCopy}
                   className="p-1.5 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--accent)] transition-all flex items-center gap-1.5"
                   title="Copy response"
@@ -523,11 +501,11 @@ export function Playground() {
                       </span>
                     )}
                   </div>
-                  <div className="p-3.5 rounded-xl bg-[var(--bg-secondary)]/60 border border-[var(--border-color)] text-[var(--text-secondary)] leading-relaxed text-xs shadow-sm backdrop-blur-sm">
+                  <div className="p-4 rounded-xl bg-[var(--bg-secondary)]/60 border border-[var(--border-color)] text-[var(--text-secondary)] leading-relaxed text-sm shadow-sm backdrop-blur-sm">
                     {loading && (waitingFirstToken || !response) ? (
                       <span className="inline-block w-2 h-4 bg-[var(--accent)] animate-pulse"></span>
                     ) : (
-                      <div className="whitespace-pre-wrap">{response}<span className="inline-block w-1.5 h-3.5 bg-[var(--accent)] animate-pulse align-middle ml-0.5" /></div>
+                      <MarkdownResponse text={response} streaming={loading} />
                     )}
                   </div>
                   
@@ -540,24 +518,6 @@ export function Playground() {
                     )}>
                       <span className="font-bold uppercase tracking-wider text-[9px] block mb-1">Build Validator</span>
                       {validationFeedback}
-                    </div>
-                  )}
-                  
-                  {showPreview && response && (
-                    <div className="rounded-xl border border-[var(--border-color)] overflow-hidden bg-white shadow-2xl h-[400px] flex flex-col">
-                      <div className="px-4 py-2 bg-zinc-100 border-b flex items-center justify-between text-[10px] font-bold text-zinc-500 uppercase tracking-widest">
-                        <span>Live Sandbox Output</span>
-                        <div className="flex items-center gap-2">
-                          <span className="w-2 h-2 rounded-full bg-red-400"></span>
-                          <span className="w-2 h-2 rounded-full bg-amber-400"></span>
-                          <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                        </div>
-                      </div>
-                      <iframe 
-                        className="w-full flex-1 border-none bg-white"
-                        title="Preview"
-                        srcDoc={extractHtml(response) || "<!DOCTYPE html><html><body style='font-family:sans-serif;padding:40px;color:#888;text-align:center'>Awaiting valid HTML output…</body></html>"}
-                      />
                     </div>
                   )}
                 </div>
@@ -615,5 +575,110 @@ export function Playground() {
         </div>
       </div>
     </div>
+  );
+}
+
+// --- Markdown response renderer ---
+// Renders the model's markdown response. HTML code blocks become interactive
+// CodeArtifact cards (with Preview/Download/Copy/Collapse). All other code blocks
+// get syntax highlighting. A collapsible "Thoughts" panel shows the pre-html text.
+function MarkdownResponse({ text, streaming }: { text: string; streaming: boolean }) {
+  // Split the response into "thoughts" (everything before the first ```html block)
+  // and the html artifact itself.
+  const htmlBlockMatch = text.match(/```html\s*([\s\S]*?)```/i);
+  const hasHtmlBlock = !!htmlBlockMatch;
+  const thoughtsText = hasHtmlBlock ? text.slice(0, htmlBlockMatch!.index) : text;
+  const htmlCode = hasHtmlBlock ? htmlBlockMatch![1].trim() : "";
+  const afterHtml = hasHtmlBlock ? text.slice((htmlBlockMatch!.index || 0) + htmlBlockMatch![0].length) : "";
+
+  const [thoughtsOpen, setThoughtsOpen] = useState(false);
+
+  return (
+    <div className="space-y-3">
+      {/* Thoughts panel (collapsible) — shows the model's reasoning before the artifact */}
+      {thoughtsText.trim() && (
+        <div className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-tertiary)]/40 overflow-hidden">
+          <button
+            onClick={() => setThoughtsOpen(!thoughtsOpen)}
+            className="w-full flex items-center justify-between px-3 py-2 text-[11px] font-bold uppercase tracking-widest text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors"
+          >
+            <span className="flex items-center gap-2">
+              <Brain size={12} className="text-[var(--accent)]" />
+              Thoughts
+            </span>
+            {thoughtsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </button>
+          {thoughtsOpen && (
+            <div className="px-4 pb-4 pt-1 text-[13px] leading-relaxed text-[var(--text-secondary)] prose-sm max-w-none">
+              <MarkdownText text={thoughtsText} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* HTML Artifact card */}
+      {hasHtmlBlock && (
+        <CodeArtifact code={htmlCode} language="html" />
+      )}
+
+      {/* Any text after the html block */}
+      {afterHtml.trim() && (
+        <div className="text-[13px] leading-relaxed text-[var(--text-secondary)] prose-sm max-w-none">
+          <MarkdownText text={afterHtml} />
+        </div>
+      )}
+
+      {/* Streaming cursor */}
+      {streaming && (
+        <span className="inline-block w-1.5 h-3.5 bg-[var(--accent)] animate-pulse align-middle" />
+      )}
+    </div>
+  );
+}
+
+// Renders markdown text (non-html code blocks get syntax highlighting, rest is markdown)
+function MarkdownText({ text }: { text: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        code({ node, className, children, ...props }: any) {
+          const match = /language-(\w+)/.exec(className || "");
+          const lang = match ? match[1] : "";
+          const codeStr = String(children).replace(/\n$/, "");
+          // HTML blocks are already handled by CodeArtifact above; skip them here
+          if (lang === 'html') return <code className={className} {...props}>{children}</code>;
+          if (!match) return <code className="px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)] text-[var(--accent)] font-mono text-xs" {...props}>{children}</code>;
+          return (
+            <div className="rounded-lg overflow-hidden border border-slate-800 bg-[#161b22] my-3">
+              <div className="px-3 py-1.5 bg-slate-900 border-b border-slate-800 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                {lang}
+              </div>
+              <div className="p-3 overflow-x-auto text-xs">
+                <SyntaxHighlighter
+                  language={lang}
+                  style={vscDarkPlus}
+                  customStyle={{ margin: 0, padding: 0, background: 'transparent' }}
+                  codeTagProps={{ style: { fontFamily: 'var(--font-mono)' } }}
+                >
+                  {codeStr}
+                </SyntaxHighlighter>
+              </div>
+            </div>
+          );
+        },
+        p({ children }: any) { return <p className="my-2 leading-relaxed">{children}</p>; },
+        ul({ children }: any) { return <ul className="list-disc list-inside my-2 space-y-1">{children}</ul>; },
+        ol({ children }: any) { return <ol className="list-decimal list-inside my-2 space-y-1">{children}</ol>; },
+        h1({ children }: any) { return <h1 className="text-lg font-bold my-3 text-[var(--text-primary)]">{children}</h1>; },
+        h2({ children }: any) { return <h2 className="text-base font-bold my-2 text-[var(--text-primary)]">{children}</h2>; },
+        h3({ children }: any) { return <h3 className="text-sm font-bold my-2 text-[var(--text-primary)]">{children}</h3>; },
+        a({ href, children }: any) { return <a href={href} className="text-[var(--accent)] underline" target="_blank" rel="noreferrer">{children}</a>; },
+        strong({ children }: any) { return <strong className="font-bold text-[var(--text-primary)]">{children}</strong>; },
+        blockquote({ children }: any) { return <blockquote className="border-l-2 border-[var(--accent)]/40 pl-3 my-2 italic text-[var(--text-tertiary)]">{children}</blockquote>; },
+      }}
+    >
+      {text}
+    </ReactMarkdown>
   );
 }
