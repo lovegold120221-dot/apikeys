@@ -449,14 +449,45 @@ async function startServer() {
   });
 
   // --- Free Google Translate via translate_a/single (same engine their website uses) ---
+  // Google's endpoint rejects URLs beyond ~5k chars, so chunk long inputs.
 
-  const gt = async (text: string, target: string, source: string = "auto") => {
-    const url = `https://translate.google.com/translate_a/single?client=gtx&sl=${source}&tl=${target}&dt=t&q=${encodeURIComponent(text)}`;
+  const GT_MAX_CHARS = 4500;
+
+  async function gtChunk(chunk: string, target: string, source: string = "auto") {
+    const url = `https://translate.google.com/translate_a/single?client=gtx&sl=${source}&tl=${target}&dt=t&q=${encodeURIComponent(chunk)}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Google Translate error: ${res.status}`);
     const data = await res.json();
     const translated = data[0]?.map((seg: any) => seg[0]).join("") || "";
     const detected = data[2] || source;
+    return { translated, detected };
+  }
+
+  function splitText(text: string, max: number): string[] {
+    if (text.length <= max) return [text];
+    const chunks: string[] = [];
+    let i = 0;
+    while (i < text.length) {
+      if (i + max >= text.length) { chunks.push(text.slice(i)); break; }
+      let cut = text.lastIndexOf("\n", i + max);
+      if (cut <= i) cut = text.lastIndexOf(". ", i + max);
+      if (cut <= i) cut = text.lastIndexOf(" ", i + max);
+      if (cut <= i) cut = i + max;
+      chunks.push(text.slice(i, cut + 1));
+      i = cut + 1;
+    }
+    return chunks;
+  }
+
+  const gt = async (text: string, target: string, source: string = "auto") => {
+    const chunks = splitText(text, GT_MAX_CHARS);
+    let translated = "";
+    let detected = source;
+    for (let idx = 0; idx < chunks.length; idx++) {
+      const part = await gtChunk(chunks[idx], target, source);
+      translated += part.translated;
+      if (idx === 0) detected = part.detected;
+    }
     return { translated, detected };
   };
 
