@@ -1,0 +1,18 @@
+{
+  "users": {
+    "firebase:68gBHOgrVVX8GITDhXeAo8Fft4S2": {
+      "email": "emilalvaroserrano@gmail.com",
+      "apiKey": "eburon_1d3b3b9bf22522e993bd183d409a3f9c35e2d17f82f9fb3c",
+      "tokensUsed": 241,
+      "tokensLimit": 1000000,
+      "createdAt": 1783319311126
+    },
+    "firebase:6ujuojcIdrU7YIqXBsiIkJzdxS73": {
+      "email": "codexxxhost@gmail.com",
+      "apiKey": "eburon_9ef4a92fe2f530f823487516250afd4b49b1d8019bd3ebe8",
+      "tokensUsed": 2026,
+      "tokensLimit": 1000000,
+      "createdAt": 1783319492143
+    }
+  }
+}

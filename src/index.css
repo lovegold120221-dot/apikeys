@@ -1,0 +1,67 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --animate-spin-once: spin 0.5s ease-in-out 1;
+  --animate-pulse-fast: pulse-fast 1s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  
+  --color-lime-400: #c0ff01;
+  --color-lime-500: #a3e635;
+  --color-obsidian: #050505;
+  --color-surface: #0d0d10;
+  --color-card: #121216;
+  
+  --shadow-glow-lime: 0 0 25px -5px rgba(192, 255, 1, 0.25);
+  --shadow-glow-lime-sm: 0 0 12px rgba(192, 255, 1, 0.15);
+}
+
+@layer base {
+  :root {
+    --bg-primary: #ffffff;
+    --bg-secondary: #fafafa;
+    --bg-tertiary: #f4f4f5;
+    --text-primary: #09090b;
+    --text-secondary: #52525b;
+    --text-tertiary: #a1a1aa;
+    --border-color: rgba(0, 0, 0, 0.08);
+    --accent: #059669;
+    --accent-fg: #ffffff;
+    --grid-color: rgba(0, 0, 0, 0.03);
+  }
+
+  .dark {
+    --bg-primary: var(--color-obsidian);
+    --bg-secondary: var(--color-surface);
+    --bg-tertiary: var(--color-card);
+    --text-primary: #f4f4f5;
+    --text-secondary: #a1a1aa;
+    --text-tertiary: #71717a;
+    --border-color: rgba(255, 255, 255, 0.1);
+    --accent: var(--color-lime-400);
+    --accent-fg: #000000;
+    --grid-color: rgba(255, 255, 255, 0.03);
+  }
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  background-image: linear-gradient(to right, var(--grid-color) 1px, transparent 1px),
+                    linear-gradient(to bottom, var(--grid-color) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--color-obsidian); }
+::-webkit-scrollbar-thumb { background: #27272a; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+
+@keyframes pulse-fast {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}

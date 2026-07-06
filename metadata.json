@@ -1,0 +1,6 @@
+{
+  "name": "Eburon AI API Documentation",
+  "description": "API documentation and playground for Eburon AI, an OpenAI-compatible local AI proxy layer.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
