@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { SUPPORTED_LANGUAGES } from '../../data/languages';
 import { CodeBlock, cn } from '../../components/CodeBlock';
 import { useAuth } from '@/src/context/AuthContext';
-import { translateVisualImage, extractDocumentText, translateTextBatch } from '@/src/lib/translateFile';
+import { translateVisualImage, extractDocumentText } from '@/src/lib/translateFile';
 import { 
   Languages, FileText, ImageIcon, Globe, Search, 
   Send, Loader2, Copy, Check, Eye, EyeOff, 
@@ -102,14 +102,30 @@ export function TranslationPlayground() {
           setProgressText("Extracting text…");
           const extracted = await extractDocumentText(selectedFile!);
           setProgressText("Translating document…");
-          const { translation, detected } = await translateTextBatch(extracted, targetLang);
+          const token = await getIdToken();
+          const docRes = await fetch("/v1/translation/text", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({ text: extracted, target_language: targetLang }),
+          });
+          const contentType = docRes.headers.get("content-type");
+          if (!contentType || !contentType.includes("application/json")) {
+            throw new Error(`Server returned non-JSON response (${docRes.status}). Is the API server running on port 3000?`);
+          }
+          const docData = await docRes.json();
+          if (!docRes.ok) {
+            throw new Error(docData.error?.message || `Translation failed (${docRes.status})`);
+          }
           body = { file: selectedFile!.name, target_language: targetLang };
           setResponse({
             object: "document_translation",
             target_language: targetLang,
-            detected_language: detected,
+            detected_language: docData.detected_language,
             extracted_text: extracted,
-            translated_text: translation,
+            translated_text: docData.translation,
           });
           break;
         }
@@ -138,11 +154,15 @@ export function TranslationPlayground() {
         }
       }
     } catch (err: any) {
+      const msg = err?.message || String(err);
+      const isNetwork = msg === "Failed to fetch";
       setResponse({
-        error: "Server unreachable",
-        details: err.message === "Failed to fetch"
-          ? "The API server is not running. Start it with: npm run dev"
-          : err.message
+        error: isNetwork ? "Network request failed" : "Translation failed",
+        details: isNetwork
+          ? (activeTab === 'image' || activeTab === 'document')
+            ? "The request to the translation endpoint was blocked or dropped. This is usually an ad-blocker or network policy blocking translate.googleapis.com, or the API server is unreachable. Ensure the server is running (npm run dev) and that browser extensions aren't blocking the request."
+            : "The API server is not running or a browser extension blocked the request. Start it with: npm run dev"
+          : msg,
       });
     } finally {
       setLoading(false);
