@@ -13,6 +13,13 @@
       "tokensUsed": 2026,
       "tokensLimit": 1000000,
       "createdAt": 1783319492143
+    },
+    "firebase:HzwCJwt9O5e5OdQ63yYTH3XEdbI2": {
+      "email": "lovegold120221@gmail.com",
+      "apiKey": "eburon_e5bd53e74d49aef39e40442a3254c9c153c33ce0a15ecef6",
+      "tokensUsed": 0,
+      "tokensLimit": 1000000,
+      "createdAt": 1783333772886
     }
   }
 }
