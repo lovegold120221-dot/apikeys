@@ -1,9 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import { CodeBlock, cn } from '../components/CodeBlock';
 import { useAuth } from '@/src/context/AuthContext';
-import { Send, Loader2, Copy, Check, Eye, EyeOff, Layout, Maximize2, X as CloseIcon } from 'lucide-react';
+import { Send, Loader2, Copy, Check, Eye, EyeOff, Layout, Maximize2, X as CloseIcon, ShieldCheck, AlertCircle, RefreshCw } from 'lucide-react';
 
-const CEO_GRADE_DIRECTIVE = "\n\nCRITICAL: You are an elite, top-tier AI assistant. Every output MUST be 'CEO-grade': professional, high-impact, polished, and functionally flawless. If writing code, ensure it is production-ready, highly optimized, and includes necessary comments for clarity. If designing UI, focus on modern aesthetics, accessibility, and exceptional user experience.";
+// Hidden universal directive — always prepended to every request, invisible to the user.
+// Forces the model to emit a self-contained, preview-ready HTML/CSS/JS component
+// regardless of the user's query, so the Live Preview iframe always has something to render.
+const PREVIEW_DIRECTIVE = `You are Eburon AI, an elite full-stack engineer and UI architect.
+
+OUTPUT CONTRACT (non-negotiable, applies to EVERY response):
+1. Always end your response with a single self-contained, runnable HTML component inside one fenced \`\`\`html block.
+2. That block MUST include <!DOCTYPE html>, <html>, <head>, <style>, and <body> — fully inlined CSS and JS, no external imports, no external scripts, no CDN fetches that can fail offline.
+3. The component must visually and functionally answer the user's request (dashboard, chart, form, animation, landing page, calculator, game, widget, etc.). If the request is informational, render the information as a beautifully styled standalone page.
+4. Use modern, accessible, responsive design. Vanilla HTML/CSS/JS only inside the block.
+5. Keep JS framework-free. Use inline <script>. No React, no Vue, no Tailwind CDN.
+6. The \`\`\`html block is what gets rendered in the Live Preview iframe, so it MUST be valid and runnable on its own.
+7. You may explain your reasoning BEFORE the html block, but the html block is mandatory and must come last.
+
+Begin every response with a 1-2 line summary of what you built, then the \`\`\`html block.`;
+
+const VALIDATOR_MODEL = 'eburon-build-validator';
+const MAX_REPROMPT_ATTEMPTS = 2;
 
 const DEFAULT_MODELS = [
   'eburon-core',
@@ -16,6 +33,8 @@ const DEFAULT_MODELS = [
   'eburon-local'
 ];
 
+type ValidationStatus = 'idle' | 'validating' | 'passed' | 'failed' | 'reprompting';
+
 export function Playground() {
   const { user, getIdToken } = useAuth();
   const [publicModels, setPublicModels] = useState<string[]>(DEFAULT_MODELS);
@@ -23,7 +42,6 @@ export function Playground() {
   const [systemPrompt, setSystemPrompt] = useState("You are Eburon AI, a helpful, highly accurate, and precise local AI assistant running on advanced local hardware.");
   const [userPrompt, setUserPrompt] = useState("");
   const [temperature, setTemperature] = useState(0.7);
-  const [stream, setStream] = useState(false);
   const [showCode, setShowCode] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -33,6 +51,9 @@ export function Playground() {
   const [rawRequest, setRawRequest] = useState("");
   const [rawResponse, setRawResponse] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [validationStatus, setValidationStatus] = useState<ValidationStatus>('idle');
+  const [validationFeedback, setValidationFeedback] = useState("");
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     if (!user) return;
@@ -67,85 +88,151 @@ export function Playground() {
     fetchModels();
   }, [apiKey]);
 
+  // --- Core API call helper (non-streaming) ---
+  const callModel = async (targetModel: string, messages: any[], temp: number): Promise<string> => {
+    const res = await fetch("/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({ model: targetModel, messages, temperature: temp, stream: false })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content || "";
+  };
+
+  // --- Validator: asks eburon-build-validator to grade the generated output ---
+  const runValidator = async (userQuery: string, generatedOutput: string): Promise<{ passed: boolean; feedback: string }> => {
+    const validatorPrompt = `You are the Eburon Build Validator. You review an AI-generated HTML component that will be rendered in a live preview iframe.
+
+USER REQUEST:
+${userQuery}
+
+GENERATED OUTPUT (the assistant's full response, ending in an \`\`\`html block):
+${generatedOutput}
+
+GRADE STRICTLY on:
+1. Does the output contain a single self-contained \`\`\`html block with <!DOCTYPE html>?
+2. Is it fully inlined (no external CDN/script imports that can fail)?
+3. Does it visually/functionally answer the user's request?
+4. Is it valid, runnable HTML/CSS/JS with no obvious syntax errors?
+5. Is it responsive and accessible?
+
+Respond in EXACTLY this format on two lines:
+PASS or FAIL
+<one short sentence describing the verdict; if FAIL, name the specific defect to fix>`;
+
+    const verdict = await callModel(VALIDATOR_MODEL, [
+      { role: "system", content: "You are a strict, meticulous build validator. Be concise and precise." },
+      { role: "user", content: validatorPrompt }
+    ], 0.2);
+
+    const trimmed = verdict.trim();
+    const passed = /^PASS\b/i.test(trimmed);
+    const feedback = trimmed.split("\n").slice(1).join(" ").trim() || (passed ? "Output validated." : "Output failed validation.");
+    return { passed, feedback };
+  };
+
+  // Extract the last ```html block from a response for preview rendering
+  const extractHtml = (text: string): string => {
+    const blocks = text.match(/```html\s*([\s\S]*?)```/gi);
+    if (!blocks || blocks.length === 0) {
+      // fall back: maybe it's just raw HTML
+      if (/<!doctype html>/i.test(text) || /<html[\s>]/i.test(text)) return text;
+      return "";
+    }
+    const last = blocks[blocks.length - 1];
+    return last.replace(/^```html\s*/i, "").replace(/```$/i, "").trim();
+  };
+
   const handleSend = async () => {
     if (!userPrompt.trim()) return;
     if (!apiKey) {
       setResponse("Error: Sign in to get an API key before sending requests.");
       return;
     }
-    
+
     setLoading(true);
     setResponse("");
     setRawResponse("");
-    
-    const requestBody = {
-      model,
-      messages: [
-        { role: "system", content: systemPrompt + CEO_GRADE_DIRECTIVE },
-        { role: "user", content: userPrompt }
-      ],
-      temperature,
-      stream
-    };
-    
-    setRawRequest(JSON.stringify(requestBody, null, 2));
+    setValidationStatus('idle');
+    setValidationFeedback("");
+    setAttempt(0);
+    setShowPreview(true);
+
+    // Hidden directive always prepended — invisible to the user.
+    const systemContent = PREVIEW_DIRECTIVE + (systemPrompt ? "\n\nADDITIONAL CONTEXT FROM USER:\n" + systemPrompt : "");
+
+    const requestLog: any[] = [];
 
     try {
-      const res = await fetch("/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${apiKey}`
-        },
-        body: JSON.stringify(requestBody)
-      });
+      let currentOutput = "";
+      let attemptNum = 0;
 
-      if (!res.ok) {
-        const errorData = await res.json();
-        setRawResponse(JSON.stringify(errorData, null, 2));
-        setResponse(`Error: ${errorData.error?.message || res.statusText}`);
-        setLoading(false);
-        return;
-      }
+      for (attemptNum = 0; attemptNum <= MAX_REPROMPT_ATTEMPTS; attemptNum++) {
+        setAttempt(attemptNum);
 
-      if (stream) {
-        const reader = res.body?.getReader();
-        const decoder = new TextDecoder();
-        let fullContent = "";
-        let rawContent = "";
-        
-        while (reader) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          
-          const chunk = decoder.decode(value, { stream: true });
-          rawContent += chunk;
-          setRawResponse(rawContent);
+        // Build messages for this attempt
+        const messages: any[] = [
+          { role: "system", content: systemContent },
+          { role: "user", content: userPrompt }
+        ];
 
-          const lines = chunk.split('\n');
-          for (const line of lines) {
-            if (line.startsWith('data: ') && line !== 'data: [DONE]') {
-              try {
-                const data = JSON.parse(line.substring(6));
-                if (data.choices && data.choices[0].delta && data.choices[0].delta.content) {
-                  fullContent += data.choices[0].delta.content;
-                  setResponse(fullContent);
-                }
-              } catch (e) {
-                // ignore parse errors for partial chunks
-              }
-            }
+        if (attemptNum > 0 && validationFeedback) {
+          // Reprompt with validator feedback attached
+          messages.push({
+            role: "assistant",
+            content: currentOutput
+          });
+          messages.push({
+            role: "user",
+            content: `The Eburon Build Validator reviewed your previous output and gave this feedback:
+
+${validationFeedback}
+
+Redo the component. Fix the specific defects above. Keep what worked. Output a corrected, complete, self-contained \`\`\`html block. Do not explain at length — focus on the fix.`
+          });
+          setValidationStatus('reprompting');
+        }
+
+        // Generate
+        setValidationStatus(attemptNum === 0 ? 'idle' : 'reprompting');
+        currentOutput = await callModel(model, messages, temperature);
+        setResponse(currentOutput);
+        setRawResponse(JSON.stringify({
+          model,
+          attempt: attemptNum,
+          messages: messages.map(m => ({ role: m.role, content: m.content.substring(0, 200) + "..." }))
+        }, null, 2));
+        requestLog.push({ model, attempt: attemptNum, messages });
+
+        // Validate
+        setValidationStatus('validating');
+        const verdict = await runValidator(userPrompt, currentOutput);
+        setValidationFeedback(verdict.feedback);
+
+        if (verdict.passed) {
+          setValidationStatus('passed');
+          break;
+        } else {
+          setValidationStatus('failed');
+          if (attemptNum >= MAX_REPROMPT_ATTEMPTS) {
+            // Keep last output even if validation failed on final attempt
+            break;
           }
-        }
-      } else {
-        const data = await res.json();
-        setRawResponse(JSON.stringify(data, null, 2));
-        if (data.choices && data.choices.length > 0) {
-          setResponse(data.choices[0].message.content);
+          // Loop will reprompt with feedback
         }
       }
+
+      setRawRequest(JSON.stringify({ model, attempts: attemptNum + 1, systemDirective: "[hidden — preview-first]", userPrompt }, null, 2));
     } catch (e: any) {
       setResponse(`Error: ${e.message}`);
+      setValidationStatus('idle');
     } finally {
       setLoading(false);
     }
@@ -233,20 +320,14 @@ export function Playground() {
             </div>
           </div>
 
-          <div className="flex items-center justify-between pt-2">
-            <label className="text-xs font-bold text-[var(--text-secondary)]">Stream Response</label>
-            <button 
-              onClick={() => setStream(!stream)}
-              className={cn(
-                "relative inline-flex h-5 w-9 items-center rounded-full transition-colors shadow-sm",
-                stream ? "bg-[var(--accent)]" : "bg-gray-400 dark:bg-gray-600"
-              )}
-            >
-              <span className={cn(
-                "inline-block h-3 w-3 transform rounded-full bg-white transition-transform shadow-sm",
-                stream ? "translate-x-5" : "translate-x-1"
-              )} />
-            </button>
+          <div className="pt-2 rounded-xl border border-[var(--border-color)] bg-[var(--bg-tertiary)]/50 p-3 space-y-1.5">
+            <div className="flex items-center gap-2">
+              <ShieldCheck size={12} className="text-[var(--accent)]" />
+              <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--accent)]">Build Validator</span>
+            </div>
+            <p className="text-[11px] text-[var(--text-tertiary)] leading-relaxed">
+              Every response is auto-checked by <code className="text-[var(--accent)]">{VALIDATOR_MODEL}</code>. If it fails, the model is reprompted with the validator's feedback (up to {MAX_REPROMPT_ATTEMPTS}×).
+            </p>
           </div>
         </div>
 
@@ -323,9 +404,29 @@ export function Playground() {
                   E
                 </div>
                 <div className="space-y-4 w-full max-w-[85%]">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-[10px] text-[var(--text-tertiary)] uppercase font-bold">{model}</span>
                     {loading && <span className="text-[9px] text-[var(--accent)] font-mono bg-[var(--accent)]/10 px-1.5 py-0.2 rounded border border-[var(--accent)]/20 animate-pulse">Running inference...</span>}
+                    {attempt > 0 && (validationStatus === 'reprompting' || validationStatus === 'validating') && (
+                      <span className="text-[9px] text-amber-500 font-mono bg-amber-500/10 px-1.5 py-0.2 rounded border border-amber-500/20 animate-pulse">
+                        <RefreshCw size={9} className="inline mr-1" />Reprompt #{attempt}
+                      </span>
+                    )}
+                    {validationStatus === 'validating' && (
+                      <span className="text-[9px] text-blue-400 font-mono bg-blue-400/10 px-1.5 py-0.2 rounded border border-blue-400/20 animate-pulse flex items-center gap-1">
+                        <ShieldCheck size={9} />Validating...
+                      </span>
+                    )}
+                    {validationStatus === 'passed' && (
+                      <span className="text-[9px] text-emerald-500 font-mono bg-emerald-500/10 px-1.5 py-0.2 rounded border border-emerald-500/20 flex items-center gap-1">
+                        <ShieldCheck size={9} />Validator: PASS
+                      </span>
+                    )}
+                    {validationStatus === 'failed' && (
+                      <span className="text-[9px] text-red-500 font-mono bg-red-500/10 px-1.5 py-0.2 rounded border border-red-500/20 flex items-center gap-1">
+                        <AlertCircle size={9} />Validator: FAIL
+                      </span>
+                    )}
                   </div>
                   <div className="p-3.5 rounded-xl bg-[var(--bg-secondary)]/60 border border-[var(--border-color)] text-[var(--text-secondary)] leading-relaxed text-xs shadow-sm backdrop-blur-sm">
                     {loading && !response ? (
@@ -334,6 +435,18 @@ export function Playground() {
                       <div className="whitespace-pre-wrap">{response}</div>
                     )}
                   </div>
+                  
+                  {validationFeedback && (validationStatus === 'passed' || validationStatus === 'failed') && (
+                    <div className={cn(
+                      "p-2.5 rounded-lg border text-[11px] font-mono leading-relaxed",
+                      validationStatus === 'passed'
+                        ? "bg-emerald-500/5 border-emerald-500/20 text-emerald-500"
+                        : "bg-red-500/5 border-red-500/20 text-red-500"
+                    )}>
+                      <span className="font-bold uppercase tracking-wider text-[9px] block mb-1">Build Validator</span>
+                      {validationFeedback}
+                    </div>
+                  )}
                   
                   {showPreview && response && (
                     <div className="rounded-xl border border-[var(--border-color)] overflow-hidden bg-white shadow-2xl h-[400px] flex flex-col">
@@ -348,28 +461,7 @@ export function Playground() {
                       <iframe 
                         className="w-full flex-1 border-none bg-white"
                         title="Preview"
-                        srcDoc={`
-                          <!DOCTYPE html>
-                          <html>
-                            <head>
-                              <style>
-                                ${response.match(/<style[^>]*>([\s\S]*?)<\/style>/i)?.[1] || 
-                                  response.match(/```css([\s\S]*?)```/i)?.[1] || ""}
-                                body { font-family: sans-serif; padding: 20px; }
-                              </style>
-                            </head>
-                            <body>
-                              ${response.match(/<body[^>]*>([\s\S]*?)<\/body>/i)?.[1] || 
-                                response.match(/```html([\s\S]*?)```/i)?.[1] || 
-                                (response.includes('```html') ? "" : response.replace(/```[\s\S]*?```/g, ""))}
-                              <script>
-                                ${response.match(/<script[^>]*>([\s\S]*?)<\/script>/i)?.[1] || 
-                                  response.match(/```javascript([\s\S]*?)```/i)?.[1] || 
-                                  response.match(/```js([\s\S]*?)```/i)?.[1] || ""}
-                              </script>
-                            </body>
-                          </html>
-                        `}
+                        srcDoc={extractHtml(response) || "<!DOCTYPE html><html><body style='font-family:sans-serif;padding:40px;color:#888;text-align:center'>Awaiting valid HTML output…</body></html>"}
                       />
                     </div>
                   )}
@@ -392,7 +484,7 @@ export function Playground() {
                     <div className="flex items-center justify-between">
                       <h3 className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-tertiary)]">Response Payload</h3>
                     </div>
-                    <CodeBlock language={stream ? "text" : "json"} code={rawResponse} />
+                    <CodeBlock language="json" code={rawResponse} />
                   </div>
                 )}
               </div>
@@ -405,7 +497,7 @@ export function Playground() {
                 type="text"
                 value={userPrompt}
                 onChange={(e) => setUserPrompt(e.target.value)}
-                placeholder="Type a prompt to test simulated response..."
+                placeholder="Describe what to build — a dashboard, chart, landing page, calculator, game..."
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();

@@ -136,14 +136,16 @@ const STATIC_ALIASES: Record<string, string> = {
   "eburon-embed": process.env.EBURON_EMBED_MODEL || "qwen3.5:0.8b",
   "eburon-reasoning": process.env.EBURON_REASONING_MODEL || "ornith:35b",
   "eburon-code": process.env.EBURON_CODE_MODEL || "qwen2.5-coder-1.5b-unsensored:local",
-  "eburon-local": process.env.EBURON_LOCAL_MODEL || "orbit-ai:latest"
+  "eburon-local": process.env.EBURON_LOCAL_MODEL || "orbit-ai:latest",
+  "eburon-build-validator": process.env.EBURON_VALIDATOR_MODEL || "ornith:35b"
 };
 
 const EBURON_ENV_OVERRIDES: Record<string, string | undefined> = {
   "eburon-pro": process.env.EBURON_CORE_MODEL,
   "eburon-pro/autonomous": process.env.EBURON_AGENT_MODEL,
   "eburon-ui-designer-vision": process.env.EBURON_VISION_MODEL,
-  "eburon/beta": process.env.EBURON_FAST_MODEL
+  "eburon/beta": process.env.EBURON_FAST_MODEL,
+  "eburon-build-validator": process.env.EBURON_VALIDATOR_MODEL
 };
 
 const isEburonBranded = (name: string): boolean =>
