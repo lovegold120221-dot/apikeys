@@ -9,7 +9,7 @@ const PREVIEW_DIRECTIVE = `You are Eburon AI. Answer the user's request, then AL
 
 const VALIDATOR_MODEL = 'eburon-build-validator';
 const MAX_REPROMPT_ATTEMPTS = 1;
-const GENERATION_TIMEOUT_MS = 60_000;
+const GENERATION_TIMEOUT_MS = 120_000;
 
 const DEFAULT_MODELS = [
   'eburon-core',
@@ -88,7 +88,11 @@ export function Playground() {
     timeoutMs: number = GENERATION_TIMEOUT_MS
   ): Promise<string> => {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      ctrl.abort();
+    }, timeoutMs);
     try {
       const res = await fetch("/v1/chat/completions", {
         method: "POST",
@@ -141,6 +145,11 @@ export function Playground() {
         }
       }
       return full;
+    } catch (e: any) {
+      if (timedOut || e?.name === "AbortError") {
+        throw new Error(`Generation timed out after ${timeoutMs / 1000}s. Try a smaller/faster model.`);
+      }
+      throw e;
     } finally {
       clearTimeout(timer);
     }
@@ -150,7 +159,11 @@ export function Playground() {
   // Uses a non-streaming internal call (validator output is short).
   const callModelSync = async (targetModel: string, messages: any[], temp: number, timeoutMs: number = 60_000): Promise<string> => {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      ctrl.abort();
+    }, timeoutMs);
     try {
       const res = await fetch("/v1/chat/completions", {
         method: "POST",
@@ -167,6 +180,11 @@ export function Playground() {
       }
       const data = await res.json();
       return data.choices?.[0]?.message?.content || "";
+    } catch (e: any) {
+      if (timedOut || e?.name === "AbortError") {
+        throw new Error(`Validator timed out after ${timeoutMs / 1000}s.`);
+      }
+      throw e;
     } finally {
       clearTimeout(timer);
     }
